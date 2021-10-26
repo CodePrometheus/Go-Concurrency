@@ -8,10 +8,10 @@ package shardkv
 // talks to the group that holds the key's shard.
 //
 
-import "../labrpc"
+import "6.824/labrpc"
 import "crypto/rand"
 import "math/big"
-import "../shardctrler"
+import "6.824/shardctrler"
 import "time"
 
 //

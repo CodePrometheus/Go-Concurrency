@@ -2,14 +2,14 @@ package main
 
 //
 // start the coordinator process, which is implemented
-// in ../mr/coordinator.go
+// in 6.824/mr/coordinator.go
 //
 // go run mrcoordinator.go pg*.txt
 //
 // Please do not change this file.
 //
 
-import "../mr"
+import "6.824/mr"
 import "time"
 import "os"
 import "fmt"

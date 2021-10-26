@@ -22,8 +22,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	//	"../labgob"
-	"../labrpc"
+	//	"6.824/labgob"
+	"6.824/labrpc"
 )
 
 //
@@ -178,7 +178,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 // handler function on the server side does not return.  Thus there
 // is no need to implement your own timeouts around Call().
 //
-// look at the comments in ../labrpc/labrpc.go for more details.
+// look at the comments in 6.824/labrpc/labrpc.go for more details.
 //
 // if you're having trouble getting RPC to work, check that you've
 // capitalized all field names in structs passed over RPC, and

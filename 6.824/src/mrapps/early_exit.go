@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"../mr"
+	"6.824/mr"
 )
 
 //
