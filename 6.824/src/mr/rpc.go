@@ -9,17 +9,49 @@ package mr
 import "os"
 import "strconv"
 
-//
-// example to show how to declare the arguments
-// and reply for an RPC.
-//
+// task state
+const (
+	WorkerWait  = 0
+	MapState    = 1
+	ReduceState = 2
+	FinishState = 3
+)
 
-type ExampleArgs struct {
-	X int
+type HeartBeatArgs struct{}
+
+// HeartBeatReply 申请任务
+type HeartBeatReply struct {
+	WorkingType   int // task state
+	MapContent    MapContent
+	ReduceContent ReduceContent
 }
 
-type ExampleReply struct {
-	Y int
+// MapContent Map 类型上下文
+type MapContent struct {
+	FileName string // 要处理地文件名
+	MapId    int    // MapId
+	nReduce  int    // 将中间结果存成 nReduce 份
+}
+
+type MapFinishReply struct{}
+
+// MapFinishArgs Map 结束后返参
+type MapFinishArgs struct {
+	MapId                 int
+	intermediateFilenames []string
+}
+
+// ReduceContent Reduce 类型上下文
+type ReduceContent struct {
+	ReduceId              int
+	intermediateFilenames []string // Map 处理后的所有中间状态文件名
+}
+
+type ReduceFinishReply struct{}
+
+type ReduceFinishArgs struct {
+	ReduceId       int
+	ResultFilename string
 }
 
 // Add your RPC definitions here.
