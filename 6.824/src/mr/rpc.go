@@ -1,65 +1,109 @@
 package mr
 
-//
-// RPC definitions.
-//
-// remember to capitalize all names.
-//
-
-import "os"
+import (
+	"fmt"
+	"os"
+	"time"
+)
 import "strconv"
 
-// task state
 const (
-	WorkerWait  = 0
-	MapState    = 1
-	ReduceState = 2
-	FinishState = 3
+	MaxTime = time.Second * 10
 )
 
-type HeartBeatArgs struct{}
-
-// HeartBeatReply 申请任务
-type HeartBeatReply struct {
-	WorkingType   int // task state
-	MapContent    MapContent
-	ReduceContent ReduceContent
+type Task struct {
+	fileName  string
+	id        int
+	startTime time.Time
+	status    TaskStatus
 }
 
-// MapContent Map 类型上下文
-type MapContent struct {
-	FileName string // 要处理地文件名
-	MapId    int    // MapId
-	nReduce  int    // 将中间结果存成 nReduce 份
+type Coordinator struct {
+	files       []string
+	nReduce     int
+	nMap        int
+	phase       string
+	tasks       []Task
+	heartbeatCh chan heartbeatMsg
+	reportCh    chan reportMsg
+	doneCh      chan struct{}
 }
 
-type MapFinishReply struct{}
-
-// MapFinishArgs Map 结束后返参
-type MapFinishArgs struct {
-	MapId                 int
-	intermediateFilenames []string
+type heartbeatMsg struct {
+	response *HeartbeatResponse
+	ok       chan struct{}
 }
 
-// ReduceContent Reduce 类型上下文
-type ReduceContent struct {
-	ReduceId              int
-	intermediateFilenames []string // Map 处理后的所有中间状态文件名
+type reportMsg struct {
+	request *ReportRequest
+	ok      chan struct{}
 }
 
-type ReduceFinishReply struct{}
-
-type ReduceFinishArgs struct {
-	ReduceId       int
-	ResultFilename string
+func (c *Coordinator) Heartbeat(request *HeartbeatRequest, response *HeartbeatResponse) error {
+	msg := heartbeatMsg{response, make(chan struct{})}
+	c.heartbeatCh <- msg
+	<-msg.ok
+	return nil
 }
 
-// Add your RPC definitions here.
+func (c *Coordinator) Report(request *ReportRequest, response *ReportResponse) error {
+	msg := reportMsg{request, make(chan struct{})}
+	c.reportCh <- msg
+	<-msg.ok
+	return nil
+}
 
-// Cook up a unique-ish UNIX-domain socket name
-// in /var/tmp, for the coordinator.
-// Can't use the current directory since
-// Athena AFS doesn't support UNIX-domain sockets.
+type HeartbeatRequest struct {
+}
+
+type HeartbeatResponse struct {
+	MapFile string
+	JobType string
+	NReduce int
+	NMap    int
+	Id      int
+}
+
+func (response HeartbeatResponse) String() string {
+	switch response.JobType {
+	case Map:
+		return fmt.Sprintf("{JobType: %v, FilePath: %v, Id: %v, NReduce: %v}",
+			response.JobType, response.MapFile, response.Id, response.NReduce)
+	case Reduce:
+		return fmt.Sprintf("{JobType: %v, Id: %v, NMap: %v, NReduce: %v}", response.JobType, response.Id, response.NMap, response.NReduce)
+	case Done, Wait:
+		return fmt.Sprintf("{JobType: %v}", response.JobType)
+	}
+	panic(fmt.Sprintf("unexpected JobType %v", response.JobType))
+}
+
+const (
+	Map    = "Map"
+	Reduce = "Reduce"
+	Done   = "Done"
+	Wait   = "Wait"
+)
+
+type TaskStatus uint8
+
+const (
+	Init TaskStatus = iota
+	Working
+	Finished
+)
+
+type ReportRequest struct {
+	Id    int
+	Phase string
+}
+
+func (request ReportRequest) String() string {
+	return fmt.Sprintf("{Id:%v,SchedulePhase:%v}", request.Id, request.Phase)
+}
+
+type ReportResponse struct {
+}
+
 func coordinatorSock() string {
 	s := "/var/tmp/824-mr-"
 	s += strconv.Itoa(os.Getuid())
