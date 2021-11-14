@@ -16,6 +16,8 @@ package raft
 //   in the same server.
 
 import (
+	"6.824/labgob"
+	"bytes"
 	//	"bytes"
 	"sync"
 	"sync/atomic"
@@ -55,7 +57,7 @@ type Raft struct {
 	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
 
-	applyCh   chan ApplyMsg
+	applyCh   chan ApplyMsg // 当Leader apply一个log entry到state machine以后，会通知该channel；这样，client只需要通过监控applyCh是否有更新即可知道是否command已commit成功
 	applyCond *sync.Cond
 
 	state       StateType
@@ -106,34 +108,32 @@ func (rf *Raft) scheduleState(state StateType) {
 // where it can later be retrieved after a crash and restart.
 // see paper's Figure 2 for a description of what should be persistent.
 func (rf *Raft) persist() {
-	// Your code here (2C).
-	// Example:
-	// w := new(bytes.Buffer)
-	// e := labgob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// data := w.Bytes()
-	// rf.persister.SaveRaftState(data)
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.currentTerm)
+	e.Encode(rf.votedFor)
+	e.Encode(rf.log)
+	data := w.Bytes()
+	rf.persister.SaveRaftState(data)
 }
 
 // restore previously persisted state.
 func (rf *Raft) readPersist(data []byte) {
-	if data == nil || len(data) < 1 { // bootstrap without any state?
+	if data == nil || len(data) < 1 {
 		return
 	}
-	// Your code here (2C).
-	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var currentTerm, voteFor int
+	var log []Entry
+	if d.Decode(&currentTerm) != nil ||
+		d.Decode(&voteFor) != nil ||
+		d.Decode(&log) != nil {
+		DPrintf("{ Node %v } restores persisted state failed", rf.me)
+	}
+	rf.currentTerm, rf.votedFor, rf.log = currentTerm, voteFor, log
+	// 日志末尾
+	rf.lastApplied, rf.commitIndex = rf.log[0].Index, rf.log[0].Index
 }
 
 // CondInstallSnapshot A service wants to switch to snapshot.  Only do so if Raft hasn't
@@ -159,7 +159,8 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	defer DPrintf("{Node %v}'s state is {state %v,term %v,commitIndex %v,lastApplied %v,firstLog %v,"+
+	defer rf.persist()
+	defer DPrintf("{ Node %v }'s state is {state %v,term %v,commitIndex %v,lastApplied %v,firstLog %v,"+
 		"lastLog %v} before processing requestVoteRequest %v and reply requestVoteResponse %v",
 		rf.me, rf.state, rf.currentTerm, rf.commitIndex, rf.lastApplied, rf.getFirstLog(), rf.getLastLog(),
 		args, reply)
@@ -225,10 +226,11 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 
 func (rf *Raft) StartElection() {
 	arg := rf.sendVoteRequest()
-	DPrintf("{ Node %v } starts election with RequestVoteRequest %v", rf.me, arg)
+	DPrintf("{ Node %v } starts election with RequestVoteArgs %v", rf.me, arg)
 	// closure闭包
 	grantedVotes := 1
 	rf.votedFor = rf.me
+	rf.persist()
 	for peer := range rf.peers {
 		if peer == rf.me {
 			continue
@@ -239,8 +241,8 @@ func (rf *Raft) StartElection() {
 			if rf.sendRequestVote(peer, arg, reply) {
 				rf.mu.Lock()
 				defer rf.mu.Unlock()
-				DPrintf("{ Node %v } receives RequestVoteResponse %v from { Node %v }"+
-					" after sending RequestVoteRequest %v in term %v", rf.me, reply,
+				DPrintf("{ Node %v } receives RequestVoteReply %v from { Node %v }"+
+					" after sending RequestVoteArgs %v in term %v", rf.me, reply,
 					peer, arg, rf.currentTerm)
 				if rf.currentTerm == arg.Term && rf.state == StateCandidate {
 					if reply.VoteGranted {
@@ -252,10 +254,11 @@ func (rf *Raft) StartElection() {
 							rf.BroadcastHeartbeat(true)
 						}
 					} else if reply.Term > rf.currentTerm {
-						DPrintf("{Node %v} finds a new leader {Node %v} with term %v and "+
+						DPrintf("{ Node %v } finds a new leader { Node %v } with term %v and "+
 							"steps down in term %v", rf.me, peer, reply.Term, rf.currentTerm)
 						rf.scheduleState(StateFollower)
 						rf.currentTerm, rf.votedFor = reply.Term, NULL
+						rf.persist()
 					}
 				}
 			}
@@ -305,6 +308,7 @@ func (rf *Raft) appendNewLog(command interface{}) Entry {
 	rf.log = append(rf.log, newLog)
 	rf.matchIndex[rf.me] = newLog.Index
 	rf.nextIndex[rf.me] = newLog.Index + 1
+	rf.persist()
 	return newLog
 }
 
@@ -409,6 +413,7 @@ func (rf *Raft) handleAppendEntriesReply(peer int, arg *AppendEntriesArgs, reply
 			if reply.Term > rf.currentTerm {
 				rf.scheduleState(StateFollower)
 				rf.currentTerm, rf.votedFor = reply.Term, NULL
+				rf.persist()
 			} else if reply.Term == rf.currentTerm {
 				rf.nextIndex[peer] = reply.ConflictIndex
 				if reply.ConflictTerm != -1 {
@@ -453,6 +458,7 @@ func (rf *Raft) advanceCommitIndexForLeader() {
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	defer rf.persist()
 	defer DPrintf("{ Node %v }'s state is {state %v,term %v,commitIndex %v,lastApplied %v,firstLog %v,lastLog %v}"+
 		" before processing AppendEntriesArgs %v and reply AppendEntriesReply %v", rf.me, rf.state, rf.currentTerm,
 		rf.commitIndex, rf.lastApplied, rf.getFirstLog(), rf.getLastLog(), args, reply)
@@ -532,14 +538,16 @@ func (rf *Raft) applier() {
 		}
 
 		rf.mu.Lock()
-		DPrintf("{Node %v} applies entries %v-%v in term %v", rf.me, rf.lastApplied,
+		DPrintf("{ Node %v } applies entries %v-%v in term %v", rf.me, rf.lastApplied,
 			commitIndex, rf.currentTerm)
+		// lastApplied <= commitIndex
 		rf.lastApplied = Max(rf.lastApplied, commitIndex)
 		rf.mu.Unlock()
 	}
 }
 
 func (rf *Raft) advanceCommitIndexForFollower(leaderCommit int) {
+	// AppendEntries RPC rule 5
 	newCommitIdx := Min(leaderCommit, rf.getLastLog().Index)
 	if newCommitIdx > rf.commitIndex {
 		DPrintf("{ Node %d } advance commitIndex from %d to %d with leaderCommit %d in term %d",
