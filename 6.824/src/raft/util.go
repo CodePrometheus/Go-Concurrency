@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-const Debug = true
+const Debug = false
 
 const (
 	HeartbeatTimeout = 125
@@ -96,4 +96,18 @@ func insertionSort(res []int) {
 			res[j], res[j-1] = res[j-1], res[j]
 		}
 	}
+}
+
+// 在底层数组长度超过实际占用的两倍时，对底层数据进行缩减
+func shrinkEntriesArray(entries []Entry) []Entry {
+	const lenMultiple = 2
+	if len(entries) == 0 {
+		entries = nil
+	}
+	if len(entries)*lenMultiple < cap(entries) {
+		newEntries := make([]Entry, len(entries))
+		copy(newEntries, entries)
+		return newEntries
+	}
+	return entries
 }

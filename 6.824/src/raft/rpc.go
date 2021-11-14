@@ -68,3 +68,24 @@ type Entry struct {
 func (entry Entry) String() string {
 	return fmt.Sprintf("{Index:%v,Term:%v}", entry.Index, entry.Term)
 }
+
+type InstallSnapshotArgs struct {
+	Term              int
+	LeaderId          int
+	LastIncludedIndex int
+	LastIncludedTerm  int
+	Data              []byte
+}
+
+func (args *InstallSnapshotArgs) String() string {
+	return fmt.Sprintf("{Term:%v,LeaderId:%v,LastIncludedIndex:%v,LastIncludedTerm:%v,DataSize:%v}",
+		args.Term, args.LeaderId, args.LastIncludedIndex, args.LastIncludedTerm, len(args.Data))
+}
+
+type InstallSnapShotReply struct {
+	Term int
+}
+
+func (reply *InstallSnapShotReply) String() string {
+	return fmt.Sprintf("{Term:%v}", reply.Term)
+}
