@@ -84,7 +84,7 @@ func (rf *Raft) scheduleState(state StateType) {
 	case StateLeader:
 		rf.electionTimeout.Stop()
 		rf.BroadcastHeartbeat(true)
-		rf.heartbeatTimeout.Reset(RandomElectionTimeout())
+		rf.heartbeatTimeout.Reset(SingleHeartbeatTimeout())
 	}
 }
 
