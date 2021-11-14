@@ -57,14 +57,43 @@ func (state StateType) String() string {
 	panic(fmt.Sprintf("Unexpected NodeState %d", state))
 }
 
-func (entry Entry) String() string {
-	return fmt.Sprintf("{Index: %v, Term:%v}", entry.Index, entry.Term)
+func (rf *Raft) getLastLog() Entry {
+	return rf.log[len(rf.log)-1]
 }
 
-func (reply RequestVoteReply) String() string {
-	return fmt.Sprintf("{Term: %v, VoteGranted: %v}", reply.Term, reply.VoteGranted)
+func (rf *Raft) getFirstLog() Entry {
+	return rf.log[0]
 }
 
-func (args RequestVoteArgs) String() string {
-	return fmt.Sprintf("{Term: %d, CandidateId: %d}", args.Term, args.CandidateId)
+func (rf *Raft) isLogUpToDate(term, index int) bool {
+	lastLog := rf.getLastLog()
+	return term > lastLog.Term || (term == lastLog.Term && index >= lastLog.Index)
+}
+
+func (rf *Raft) matchLog(term, index int) bool {
+	return index <= rf.getLastLog().Index &&
+		rf.log[index-rf.getFirstLog().Index].Term == term
+}
+
+func Min(x, y int) int {
+	if x > y {
+		return y
+	}
+	return x
+}
+
+func Max(x, y int) int {
+	if x < y {
+		return y
+	}
+	return x
+}
+
+func insertionSort(res []int) {
+	l, r := 0, len(res)
+	for i := l + 1; i < r; i++ {
+		for j := i; j > l && res[j] < res[j-1]; j-- {
+			res[j], res[j-1] = res[j-1], res[j]
+		}
+	}
 }
