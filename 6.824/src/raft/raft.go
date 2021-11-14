@@ -88,11 +88,11 @@ func (rf *Raft) scheduleState(state StateType) {
 	DPrintf("{ Node %d } change state from %v to %v in Term %d", rf.me, rf.state, state, rf.currentTerm)
 	rf.state = state
 	switch state {
+	// 转换后调正对应角色heartbeat和electionTime操作
 	case StateFollower:
 		rf.heartbeatTimeout.Stop()
 		rf.electionTimeout.Reset(RandomElectionTimeout())
 	case StateLeader:
-		// init log
 		lastLog := rf.getLastLog()
 		for i := 0; i < len(rf.peers); i++ {
 			rf.nextIndex[i], rf.matchIndex[i] = lastLog.Index+1, 0
@@ -164,6 +164,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.me, rf.state, rf.currentTerm, rf.commitIndex, rf.lastApplied, rf.getFirstLog(), rf.getLastLog(),
 		args, reply)
 
+	// 满足以下函数直接结束
 	if args.Term < rf.currentTerm || (args.Term == rf.currentTerm &&
 		rf.votedFor != NULL &&
 		rf.votedFor != args.CandidateId) {
@@ -225,13 +226,14 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 func (rf *Raft) StartElection() {
 	arg := rf.sendVoteRequest()
 	DPrintf("{ Node %v } starts election with RequestVoteRequest %v", rf.me, arg)
-	// closure
+	// closure闭包
 	grantedVotes := 1
 	rf.votedFor = rf.me
 	for peer := range rf.peers {
 		if peer == rf.me {
 			continue
 		}
+		// 并行异步投票
 		go func(peer int) {
 			reply := new(RequestVoteReply)
 			if rf.sendRequestVote(peer, arg, reply) {
@@ -447,6 +449,7 @@ func (rf *Raft) advanceCommitIndexForLeader() {
 	}
 }
 
+// AppendEntries 投票 & 心跳机制
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -454,6 +457,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		" before processing AppendEntriesArgs %v and reply AppendEntriesReply %v", rf.me, rf.state, rf.currentTerm,
 		rf.commitIndex, rf.lastApplied, rf.getFirstLog(), rf.getLastLog(), args, reply)
 
+	// 拒绝
 	if args.Term < rf.currentTerm {
 		reply.Term, reply.Success = rf.currentTerm, false
 		return
