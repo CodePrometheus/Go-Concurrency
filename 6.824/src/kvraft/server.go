@@ -4,47 +4,138 @@ import (
 	"6.824/labgob"
 	"6.824/labrpc"
 	"6.824/raft"
-	"log"
+	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
-const Debug = false
-
-func DPrintf(format string, a ...interface{}) (n int, err error) {
-	if Debug {
-		log.Printf(format, a...)
-	}
-	return
-}
-
-type Op struct {
-	// Your definitions here.
-	// Field names must start with capital letters,
-	// otherwise RPC will break.
-}
-
 type KVServer struct {
-	mu      sync.Mutex
-	me      int
+	mu      sync.RWMutex
 	rf      *raft.Raft
+	dead    int32
 	applyCh chan raft.ApplyMsg
-	dead    int32 // set by Kill()
 
-	maxraftstate int // snapshot if log grows this big
+	maxRaftState int // snapshot if log grows this big
+	lastApplied  int
 
-	// Your definitions here.
+	db             db
+	lastOperations map[int64]OperationContext // 幂等性保证，记录上一次commandId及clientId对应的reply
+	waitApplyChan  map[int]chan *CommandReply // 唤醒客户端线程
 }
 
-func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
-	// Your code here.
+func (kv *KVServer) Command(request *CommandRequest, reply *CommandReply) {
+	defer DPrintf("{ Node %v } processes CommandRequest %v with CommandReply %v",
+		kv.rf.Me(), request, reply)
+
+	kv.mu.RLock()
+	if request.Op != OpGet && kv.isDuplicateRequest(request.ClientId, request.CommandId) {
+		lastReply := kv.lastOperations[request.ClientId].LastReply
+		reply.Value, reply.Err = lastReply.Value, lastReply.Err
+		kv.mu.RUnlock()
+		return
+	}
+	kv.mu.RUnlock()
+
+	idx, _, isLeader := kv.rf.Start(Command{request})
+	if !isLeader {
+		reply.Err = ErrWrongLeader
+		return
+	}
+
+	kv.mu.Lock()
+	waitChan := kv.getWaitApplyChan(idx)
+	kv.mu.Unlock()
+
+	select {
+	case res := <-waitChan:
+		reply.Value, reply.Err = res.Value, res.Err
+	case <-time.After(ExecuteTimeout):
+		reply.Err = ErrTimeout
+	}
+
+	go func() {
+		kv.mu.Lock()
+		kv.removeOutdatedNotifyChan(idx)
+		kv.mu.Unlock()
+	}()
 }
 
-func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
-	// Your code here.
+func (kv *KVServer) removeOutdatedNotifyChan(idx int) {
+	delete(kv.waitApplyChan, idx)
 }
 
-//
+func (kv *KVServer) getWaitApplyChan(idx int) chan *CommandReply {
+	if _, ok := kv.waitApplyChan[idx]; !ok {
+		kv.waitApplyChan[idx] = make(chan *CommandReply, 1)
+	}
+	return kv.waitApplyChan[idx]
+}
+
+func (kv *KVServer) applier() {
+	for !kv.killed() {
+		select {
+		case msg := <-kv.applyCh:
+			DPrintf("{ Node %v } tries to apply msg %v", kv.rf.Me(), msg)
+			if msg.CommandValid {
+				kv.mu.Lock()
+				if msg.CommandIndex <= kv.lastApplied {
+					DPrintf("{ Node %v } discards outdated msg %v because a newer snapshot which "+
+						"lastApplied is %v has been restored", kv.rf.Me(), msg, kv.lastApplied)
+					kv.mu.Unlock()
+					continue
+				}
+				kv.lastApplied = msg.CommandIndex
+
+				var reply *CommandReply
+				command := msg.Command.(Command)
+				if command.Op != OpGet && kv.isDuplicateRequest(command.ClientId, command.CommandId) {
+					DPrintf("{ Node %v } doesn't apply duplicated message %v to"+
+						" stateMachine because maxAppliedCommandId is %v for client %v",
+						kv.rf.Me(), msg, kv.lastOperations[command.ClientId], command.ClientId)
+					reply = kv.lastOperations[command.ClientId].LastReply
+				} else {
+					// apply log
+					reply = kv.applyLogToStateMachine(command)
+					if command.Op != OpGet {
+						kv.lastOperations[command.ClientId] = OperationContext{
+							command.CommandId, reply,
+						}
+					}
+				}
+
+				if currentTerm, isLeader := kv.rf.GetState(); isLeader && msg.CommandTerm == currentTerm {
+					waitApplyChan := kv.getWaitApplyChan(msg.CommandIndex)
+					waitApplyChan <- reply
+				}
+				kv.mu.Unlock()
+			} else {
+				panic(fmt.Sprintf("unexpected Message %v", msg))
+			}
+		}
+	}
+}
+
+func (kv *KVServer) applyLogToStateMachine(command Command) *CommandReply {
+	var value string
+	var err Err
+	switch command.Op {
+	case OpPut:
+		err = kv.db.Put(command.Key, command.Value)
+	case OpGet:
+		value, err = kv.db.Get(command.Key)
+	case OpAppend:
+		err = kv.db.Append(command.Key, command.Value)
+	}
+	return &CommandReply{err, value}
+}
+
+func (kv *KVServer) isDuplicateRequest(clientId int64, CommandId int64) bool {
+	operationContext, ok := kv.lastOperations[clientId]
+	return ok && CommandId <= operationContext.MaxAppliedCommandId
+}
+
+// Kill
 // the tester calls Kill() when a KVServer instance won't
 // be needed again. for your convenience, we supply
 // code to set rf.dead (without needing a lock),
@@ -53,19 +144,17 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 // code to Kill(). you're not required to do anything
 // about this, but it may be convenient (for example)
 // to suppress debug output from a Kill()ed instance.
-//
 func (kv *KVServer) Kill() {
+	DPrintf("{ Node %v } has been killed", kv.rf.Me())
 	atomic.StoreInt32(&kv.dead, 1)
 	kv.rf.Kill()
-	// Your code here, if desired.
 }
 
 func (kv *KVServer) killed() bool {
-	z := atomic.LoadInt32(&kv.dead)
-	return z == 1
+	return atomic.LoadInt32(&kv.dead) == 1
 }
 
-//
+// StartKVServer
 // servers[] contains the ports of the set of
 // servers that will cooperate via Raft to
 // form the fault-tolerant key/value service.
@@ -78,22 +167,26 @@ func (kv *KVServer) killed() bool {
 // you don't need to snapshot.
 // StartKVServer() must return quickly, so it should start goroutines
 // for any long-running work.
-//
-func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxraftstate int) *KVServer {
+func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxRaftState int) *KVServer {
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
-	labgob.Register(Op{})
+	labgob.Register(Command{})
+	applyCh := make(chan raft.ApplyMsg)
 
-	kv := new(KVServer)
-	kv.me = me
-	kv.maxraftstate = maxraftstate
+	kv := &KVServer{
+		dead:           0,
+		lastApplied:    0,
+		maxRaftState:   maxRaftState,
+		db:             NewDbKV(),
+		lastOperations: make(map[int64]OperationContext),
+		waitApplyChan:  make(map[int]chan *CommandReply),
+		applyCh:        applyCh,
+		rf:             raft.Make(servers, me, persister, applyCh),
+	}
 
-	// You may need initialization code here.
+	// commit 到状态机
+	go kv.applier()
 
-	kv.applyCh = make(chan raft.ApplyMsg)
-	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
-
-	// You may need initialization code here.
-
+	DPrintf("{ Node %v } has started", kv.rf.Me())
 	return kv
 }

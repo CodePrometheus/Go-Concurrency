@@ -178,7 +178,7 @@ func partitioner(t *testing.T, cfg *config, ch chan bool, done *int32) {
 	for atomic.LoadInt32(done) == 0 {
 		a := make([]int, cfg.n)
 		for i := 0; i < cfg.n; i++ {
-			a[i] = (rand.Int() % 2)
+			a[i] = rand.Int() % 2
 		}
 		pa := make([][]int, 2)
 		for i := 0; i < 2; i++ {
