@@ -14,7 +14,7 @@ func producer(chanStorage chan int) {
 		chanStorage <- product
 		fmt.Println("生产了商品", product)
 	}
-	close(chanStorage)
+	down(chanStorage)
 }
 
 // 定义中转效果
@@ -24,7 +24,7 @@ func mid(pro chan int, con chan int) {
 		fmt.Println("完成了中转托运", p)
 	}
 	fmt.Println("商品转运完成! 商店关闭!")
-	close(con)
+	down(con)
 }
 
 // 定义消费者
