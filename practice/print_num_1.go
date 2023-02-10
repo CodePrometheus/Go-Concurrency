@@ -1,25 +1,32 @@
 package main
 
-import "sync"
+import (
+	"fmt"
+	"sync"
+)
 
 // 两个 G 交替打印数字
 func main() {
-	var c = make(chan struct{})
+	ch := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		for i := 1; i <= 10; i += 2 {
-			print(i)
-			c <- struct{}{}
-			<-c
+		for i := 1; i < 101; i++ {
+			ch <- struct{}{}
+			if i%2 == 1 {
+				fmt.Println("线程1打印: ", i)
+			}
 		}
 	}()
 	go func() {
 		defer wg.Done()
-		for i := 2; i <= 10; i += 2 {
-			<-c
-			print(i)
+		for i := 1; i < 101; i++ {
+			<-ch
+			if i%2 == 0 {
+				fmt.Println("线程2打印: ", i)
+			}
 		}
 	}()
+	wg.Wait()
 }

@@ -1,4 +1,4 @@
-package designpatterns
+package main
 
 import "sync"
 
