@@ -4,6 +4,7 @@ import (
 	"6.824/labgob"
 	"6.824/labrpc"
 	"6.824/raft"
+	"bytes"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -108,12 +109,52 @@ func (kv *KVServer) applier() {
 					waitApplyChan := kv.getWaitApplyChan(msg.CommandIndex)
 					waitApplyChan <- reply
 				}
+
+				needSnapshot := kv.needSnapshot()
+				if needSnapshot {
+					kv.takeSnapshot(msg.CommandIndex)
+				}
+
+				kv.mu.Unlock()
+			} else if msg.SnapshotValid {
+				kv.mu.Lock()
+				if kv.rf.CondInstallSnapshot(msg.SnapshotTerm, msg.SnapshotIndex, msg.Snapshot) {
+					kv.restoreSnapshot(msg.Snapshot)
+					kv.lastApplied = msg.SnapshotIndex
+				}
 				kv.mu.Unlock()
 			} else {
 				panic(fmt.Sprintf("unexpected Message %v", msg))
 			}
 		}
 	}
+}
+
+func (kv *KVServer) needSnapshot() bool {
+	return kv.maxRaftState != -1 && kv.rf.GetRaftStateSize() >= kv.maxRaftState
+}
+
+func (kv *KVServer) takeSnapshot(idx int) {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(kv.db)
+	e.Encode(kv.lastOperations)
+	kv.rf.Snapshot(idx, w.Bytes())
+}
+
+func (kv *KVServer) restoreSnapshot(snapshot []byte) {
+	if snapshot == nil || len(snapshot) == 0 {
+		return
+	}
+	r := bytes.NewBuffer(snapshot)
+	d := labgob.NewDecoder(r)
+	var db DbKV
+	var lastOperations map[int64]OperationContext
+	if d.Decode(&db) != nil ||
+		d.Decode(&lastOperations) != nil {
+		DPrintf("{ Node %v } restores snapshot failed", kv.rf.Me())
+	}
+	kv.db, kv.lastOperations = &db, lastOperations
 }
 
 func (kv *KVServer) applyLogToStateMachine(command Command) *CommandReply {
@@ -130,9 +171,9 @@ func (kv *KVServer) applyLogToStateMachine(command Command) *CommandReply {
 	return &CommandReply{err, value}
 }
 
-func (kv *KVServer) isDuplicateRequest(clientId int64, CommandId int64) bool {
+func (kv *KVServer) isDuplicateRequest(clientId int64, commandId int64) bool {
 	operationContext, ok := kv.lastOperations[clientId]
-	return ok && CommandId <= operationContext.MaxAppliedCommandId
+	return ok && commandId <= operationContext.MaxAppliedCommandId
 }
 
 // Kill

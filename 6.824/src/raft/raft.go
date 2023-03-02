@@ -61,6 +61,12 @@ func (rf *Raft) GetState() (int, bool) {
 	return rf.currentTerm, rf.state == StateLeader
 }
 
+func (rf *Raft) GetRaftStateSize() int {
+	rf.mu.RLock()
+	defer rf.mu.RUnlock()
+	return rf.persister.RaftStateSize()
+}
+
 func (rf *Raft) scheduleState(state StateType) {
 	if state == rf.state {
 		return
